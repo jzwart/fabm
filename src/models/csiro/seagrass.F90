@@ -24,7 +24,8 @@ module csiro_seagrass
       type (type_bottom_state_variable_id) :: id_D_C_B, id_D_N_B, id_D_P_B
       type (type_bottom_state_variable_id) :: id_N
       type (type_bottom_state_variable_id) :: id_P
-      type (type_dependency_id)            :: id_E_par
+      type (type_horizontal_dependency_id) :: id_E_par
+      type (type_horizontal_diagnostic_variable_id) :: id_E_par_below
       type (type_dependency_id)            :: id_T
       
       real(rk) :: mu_max_SG
@@ -89,8 +90,9 @@ contains
       call self%register_state_dependency(self%id_D_N_B,'D_N_B','mmol N m-3','sink for nitrogen in root detritus')
       call self%register_state_dependency(self%id_D_P_B,'D_P_B','mmol P m-3','sink for phosphorus in root detritus')
 
-      call self%register_dependency(self%id_E_par,standard_variables%downwelling_photosynthetic_radiative_flux)
-      call self%register_dependency(self%id_T,    standard_variables%temperature)
+      call self%register_dependency(self%id_T, standard_variables%temperature)
+      call self%register_dependency(self%id_E_par,               'E_par',      'W m-2','photosynthetically active radiation at top of canopy')
+      call self%register_diagnostic_variable(self%id_E_par_below,'E_par_below','W m-2','photosynthetically active radiation below canopy',domain=domain_bottom,source=source_do_bottom)
    end subroutine initialize
 
    subroutine do_bottom(self,_ARGUMENTS_DO_BOTTOM_)
@@ -108,18 +110,19 @@ contains
       _GET_HORIZONTAL_(self%id_SG_B,SG_B)
       _GET_HORIZONTAL_(self%id_N,N)
       _GET_HORIZONTAL_(self%id_P,P)
-      _GET_(self%id_E_par,E_par)
+      _GET_HORIZONTAL_(self%id_E_par,E_par)
       _GET_(self%id_T,T)
 
       ! E_par: from W m-2 to mol m-2 d-1
       E_par = E_par/(563900._rk)*86400._rk
 
-      T_fac = self%Q_10**((T-T_ref)/10._rk) !TODO
+      T_fac = self%Q_10**((T-T_ref)/10._rk)
 
-      k_resp = 2*(self%E_comp*self%A_par*self%Omega_SG*self%sin_beta_blade - 5500._rk/30._rk/14._rk*self%zeta_SG_A)*SG_A
+      k_resp = 2*(self%E_comp*self%A_par*self%Omega_SG*self%sin_beta_blade - 5500._rk/30._rk/14._rk*T_fac*(self%zeta_SG_A+self%f_below/(1._rk-self%f_below)*self%zeta_SG_B))*SG_A
       k_I = E_par*(1.0_rk-exp(-self%A_par*self%Omega_SG*self%sin_beta_blade*SG_A))
-      mu_SG_A = min(self%mu_max_SG*N/(self%K_SG_N+N), self%mu_max_SG*P/(self%K_SG_P+P), 30._rk/5500._rk*14._rk*max(0.0_rk,k_I-k_resp)/SG_A)
-      Tau = (self%f_below - SG_B/(SG_A+SG_B))*(SG_A+SG_B)*self%tau_tran
+      mu_SG_A = min(T_fac*self%mu_max_SG*N/(self%K_SG_N+N), T_fac*self%mu_max_SG*P/(self%K_SG_P+P), 30._rk/5500._rk*14._rk*max(0.0_rk,k_I-k_resp)/SG_A)
+      Tau = T_fac*(self%f_below - SG_B/(SG_A+SG_B))*(SG_A+SG_B)*self%tau_tran
+      _SET_HORIZONTAL_DIAGNOSTIC_(self%id_E_par_below,E_par*exp(-self%A_par*self%Omega_SG*self%sin_beta_blade*SG_A))
 
       _SET_BOTTOM_ODE_(self%id_N,                -1._rk/14._rk*mu_SG_A*SG_A/86400._rk*1000._rk)  ! in mmol m-3 s-1
       _SET_BOTTOM_ODE_(self%id_P,         -1._rk/30._rk/14._rk*mu_SG_A*SG_A/86400._rk*1000._rk)  ! in mmol m-3 s-1
@@ -130,8 +133,8 @@ contains
 
       ! Detritus production (separate leaf and root)
       ! Also conevrt from d-1 to s-1, and from g N to mmol N
-      dD_N_A = (self%zeta_SG_A*(SG_A-self%f_seed/self%Omega_SG*(1.0_rk-self%f_below)))/86400._rk*1000._rk/14._rk
-      dD_N_B = (self%zeta_SG_B*(SG_B-self%f_seed/self%Omega_SG*self%f_below         ))/86400._rk*1000._rk/14._rk
+      dD_N_A = T_fac*(self%zeta_SG_A*(SG_A-self%f_seed/self%Omega_SG*(1.0_rk-self%f_below)))/86400._rk*1000._rk/14._rk
+      dD_N_B = T_fac*(self%zeta_SG_B*(SG_B-self%f_seed/self%Omega_SG*self%f_below         ))/86400._rk*1000._rk/14._rk
       _SET_BOTTOM_EXCHANGE_(self%id_D_N_A,                      dD_N_A)
       _SET_BOTTOM_EXCHANGE_(self%id_D_P_A,  1._rk/30._rk       *dD_N_A)
       _SET_BOTTOM_EXCHANGE_(self%id_D_C_A,550._rk/30._rk*12._rk*dD_N_A)
