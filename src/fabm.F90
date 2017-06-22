@@ -89,6 +89,7 @@
    integer, parameter, public :: data_source_user = 3
    integer, parameter, public :: data_source_default = data_source_host
 
+   real(rk), parameter :: invalid_scratch_value = huge(1.0_rk)
 !
 ! !PUBLIC TYPES:
 !
@@ -2632,6 +2633,7 @@ subroutine prefetch_interior(self,settings,environment _ARGUMENTS_INTERIOR_IN_)
 #else
    allocate(environment%scratch(self%nscratch))
 #endif
+   environment%scratch = invalid_scratch_value
    if (allocated(settings%prefill_type)) then
       do i=1,self%nscratch
          if (settings%prefill_type(i)==prefill_constant) then
@@ -2687,6 +2689,7 @@ subroutine prefetch_horizontal(self,settings,environment _ARGUMENTS_HORIZONTAL_I
 #else
    allocate(environment%scratch_hz(self%nscratch_hz))
 #endif
+   environment%scratch_hz = invalid_scratch_value
    if (allocated(settings%prefill_type)) then
       do i=1,self%nscratch_hz
          if (settings%prefill_type(i)==prefill_constant) then
@@ -2886,6 +2889,7 @@ subroutine prefetch_vertical(self,settings,environment _ARGUMENTS_VERTICAL_IN_)
 #else
    allocate(environment%scratch(self%nscratch))
 #endif
+   environment%scratch = invalid_scratch_value
    if (allocated(settings%prefill_type)) then
       do i=1,self%nscratch
          if (settings%prefill_type(i)==prefill_constant) then
@@ -2903,6 +2907,7 @@ subroutine prefetch_vertical(self,settings,environment _ARGUMENTS_VERTICAL_IN_)
 #else
    allocate(environment%scratch_hz(self%nscratch_hz))
 #endif
+   environment%scratch_hz = invalid_scratch_value
 end subroutine prefetch_vertical
 
 subroutine deallocate_prefetch(self,settings,environment _ARGUMENTS_INTERIOR_IN_)
@@ -2996,7 +3001,76 @@ subroutine deallocate_prefetch_vertical(self,settings,environment _ARGUMENTS_VER
    deallocate(environment%prefetch_scalar)
    deallocate(environment%scratch)
    deallocate(environment%scratch_hz)
-end subroutine deallocate_prefetch_vertical
+   end subroutine deallocate_prefetch_vertical
+
+   subroutine check_scratch(self, environment, model, routine)
+      use, intrinsic :: ieee_arithmetic
+
+      type (type_model),       intent(in) :: self
+      type (type_environment), intent(in) :: environment
+      class (type_base_model), intent(in) :: model
+      character(len=*),        intent(in) :: routine
+
+      integer                   :: ivar, _I_, _J_
+      type (type_link), pointer :: link
+      logical                   :: valid
+
+      valid = .true.
+      if (allocated(environment%scratch)) then
+         do ivar=1,self%nscratch
+            link => null()
+#  if defined(_INTERIOR_IS_VECTORIZED_)
+            do _I_=1,size(environment%scratch, 1)
+               if (.not.ieee_is_finite(environment%scratch(_I_,ivar))) call fail(domain_interior, environment%scratch(_I_,ivar), _I_)
+            end do
+#  else
+            if (.not.ieee_is_finite(environment%scratch(ivar))) call fail(domain_interior, environment%scratch(ivar))
+#  endif
+         end do
+      end if
+      if (allocated(environment%scratch_hz)) then
+         do ivar=1,self%nscratch_hz
+            link => null()
+#  if defined(_HORIZONTAL_IS_VECTORIZED_)
+            do _J_=1,size(environment%scratch_hz, 1)
+               if (.not.ieee_is_finite(environment%scratch_hz(_J_,ivar))) call fail(domain_horizontal, environment%scratch_hz(_J_,ivar), _J_)
+            end do
+#  else
+            if (.not.ieee_is_finite(environment%scratch_hz(ivar))) call fail(domain_horizontal, environment%scratch_hz(ivar))
+#  endif
+         end do
+      end if
+      if (.not.valid) call fatal_error('check_scratch', trim(model%get_path())//'::'//routine//' wrote one or more non-finite values.')
+
+   contains
+
+      subroutine fail(domain, value, index)
+         integer, intent(in) :: domain
+         real(rk),intent(in) :: value
+         integer, intent(in), optional :: index
+
+         character(len=80) :: postfix
+         character(len=20) :: strvalue
+
+         if (valid) call log_message(trim(model%get_path())//'::'//routine//' wrote one or more non-finite values:')
+         if (.not.associated(link)) then
+            link => self%links_postcoupling%first
+            do while (associated(link))
+               if (iand(link%target%domain,domain)/=0 .and. link%target%write_indices%value==ivar) exit
+               link => link%next
+            end do
+         end if
+         write (strvalue,'(e15.8)') value
+         if (present(index)) then
+            write (postfix,'(" at position ",i0)') index
+         else
+            postfix = ''
+         end if
+         call log_message('  '//trim(link%target%name)//' = '//trim(strvalue)//trim(postfix))
+         valid = .false.
+      end subroutine
+
+   end subroutine check_scratch
 
 !-----------------------------------------------------------------------
 !BOP
@@ -3207,6 +3281,7 @@ end subroutine deallocate_prefetch_vertical
    node => self%do_interior_environment%call_list%first
    do while (associated(node))
       call node%model%do(_ARGUMENTS_INTERIOR_)
+      call check_scratch(self, environment, node%model, 'do')
 
       ! Copy newly written diagnostics to prefetch so consecutive models can use it.
       _DO_CONCURRENT_(i,1,size(node%copy_commands_int))
@@ -3275,6 +3350,7 @@ end subroutine deallocate_prefetch_vertical
    node => self%models%first
    do while (associated(node))
       call node%model%do_ppdd(_ARGUMENTS_INTERIOR_,pp,dd)
+      call check_scratch(self, environment, node%model, 'do_ppdd')
 
       ! Copy newly written diagnostics to prefetch
       do i=1,size(node%model%reused_diag)
@@ -3657,8 +3733,10 @@ end subroutine internal_check_horizontal_state
       do while (associated(node))
          if (node%source==source_do_horizontal) then
             call node%model%do_horizontal(_ARGUMENTS_HORIZONTAL_)
+            call check_scratch(self, environment, node%model, 'do_horizontal')
          else
             call node%model%do_surface(_ARGUMENTS_HORIZONTAL_)
+            call check_scratch(self, environment, node%model, 'do_surface')
          end if
 
          ! Copy newly written diagnostics to prefetch
@@ -3743,8 +3821,10 @@ end subroutine internal_check_horizontal_state
    do while (associated(node))
       if (node%source==source_do_horizontal) then
          call node%model%do_horizontal(_ARGUMENTS_HORIZONTAL_)
+         call check_scratch(self, environment, node%model, 'do_horizontal')
       else
          call node%model%do_bottom(_ARGUMENTS_HORIZONTAL_)
+         call check_scratch(self, environment, node%model, 'do_bottom')
       end if
 
       ! Copy newly written diagnostics to prefetch
@@ -3817,6 +3897,7 @@ end subroutine internal_check_horizontal_state
    node => self%models%first
    do while (associated(node))
       call node%model%do_bottom_ppdd(_ARGUMENTS_HORIZONTAL_,pp,dd,benthos_offset)
+      call check_scratch(self, environment, node%model, 'do_bottom_ppdd')
 
       ! Copy newly written diagnostics to prefetch
       do i=1,size(node%model%reused_diag_hz)
@@ -3979,6 +4060,7 @@ end subroutine internal_check_horizontal_state
    node => self%get_light_environment%call_list%first
    do while (associated(node))
       call node%model%get_light(_ARGUMENTS_VERTICAL_)
+      call check_scratch(self, environment, node%model, 'get_light')
 
       ! Copy newly written diagnostics to prefetch so consecutive models can use it.
       _DO_CONCURRENT_(i,1,size(node%copy_commands_int))
