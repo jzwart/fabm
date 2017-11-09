@@ -18,6 +18,7 @@ set(DEFAULT_INSTITUTES
     ersem        # European Regional Seas Ecosytem Model
     niva         # Norsk Institutt for Vannforskning, Norway
     akvaplan     # Akvaplan-niva, Norway
+    jzwart       # Jacob Zwart, USGS
 )
 
 # List of institutes that use manual edits to fabm_library.F90.
