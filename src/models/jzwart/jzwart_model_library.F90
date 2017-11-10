@@ -1,7 +1,8 @@
 module jzwart_model_library
 
    use fabm_types, only: type_base_model_factory,type_base_model
-
+   
+   use jzwart_doc_decay
    ! Add use statements for new models here
 
    implicit none
@@ -24,6 +25,7 @@ contains
       class (type_base_model),pointer :: model
 
       select case (name)
+         case('doc_decay'); allocate(type_jzwart_doc_decay::model)
          ! Add case statements for new models here
       end select
 

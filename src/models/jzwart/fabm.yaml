@@ -1,0 +1,3 @@
+instances:
+  mymodel: doc_decay
+    model: jzwart/doc_decay
