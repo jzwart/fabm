@@ -1,0 +1,9 @@
+instances:
+  doc_decay:
+    long_name: first_order_doc_decay_in_water
+    model: jzwart/doc_decay
+    parameters:
+      d: 0.002 # decay rate of doc [day-1]
+    initialization:
+      doc: 0.00083 # concentration of doc [mmol m-3] 
+      
